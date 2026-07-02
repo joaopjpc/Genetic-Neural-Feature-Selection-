@@ -46,11 +46,14 @@ RANDOM_STATE = 42
 # ----------------------------------------------------------------------------
 POPULATION_SIZE = 150         # nº de cromossomos na populacao
 MIN_FEATURES = 3              # minimo de atributos ligados por cromossomo (reparo)
-MAX_GENERATIONS = 200         # criterio de parada 1: geracoes maximas
+MAX_GENERATIONS = 200         # criterio de parada 1: geracoes maximas (enunciado)
 CROSSOVER_RATE = 0.85         # Pc: probabilidade de aplicar o crossover
 ELITISM_SIZE = 10             # os 10 melhores nunca sao descartados
 STEADY_STATE_GAP = 2          # filhos gerados/inseridos por PASSO steady-state (gap)
-NO_IMPROVEMENT_LIMIT = 20     # criterio de parada 2: geracoes sem melhoria
+NO_IMPROVEMENT_LIMIT = 20     # criterio de parada 2: geracoes sem melhoria (enunciado)
+MIN_IMPROVEMENT = 1e-3        # ganho minimo de fitness para contar como "melhoria"
+                              # (definicao operacional de "sem melhora"; sem isto,
+                              # ruido de ponto flutuante impede a parada por estagnacao)
 
 # Definicao de "geracao" no steady-state: uma geracao = uma renovacao completa
 # da populacao = POPULATION_SIZE / STEADY_STATE_GAP passos (cada passo cria `gap`
@@ -82,7 +85,7 @@ NN_HIDDEN = (32, 16)          # neuronios das camadas ocultas
 NN_LEARNING_RATE = 0.001      # taxa de aprendizado do Adam
 NN_MAX_ITER = 200             # nº maximo de epocas de treino
 NN_N_ITER_NO_CHANGE = 10      # paciencia do early stopping (menor erro de validacao)
-NN_BATCH_SIZE = 32            # tamanho do mini-batch
+NN_BATCH_SIZE = 512           # tamanho do mini-batch (lote maior = treino bem mais rapido)
 
 # ----------------------------------------------------------------------------
 # Aceleracao da fitness
@@ -91,7 +94,7 @@ NN_BATCH_SIZE = 32            # tamanho do mini-batch
 # Um subconjunto estratificado da o mesmo sinal de F1 para comparar cromossomos e
 # corta muito o tempo (o AG dispara milhares de treinos). A avaliacao final do
 # melhor cromossomo (e o teste) usa a base de treino cheia. None = base cheia.
-FITNESS_SUBSAMPLE = 20000
+FITNESS_SUBSAMPLE = 4000
 
 # ----------------------------------------------------------------------------
 # Experimentos

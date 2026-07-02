@@ -26,11 +26,18 @@ Ex.: 150/2 = 75 passos = 150 filhos por geracao. Isso da escala real a busca -
 apenas 2 por "geracao". A convergencia e registrada uma vez por geracao.
 """
 
+import os
+
 import numpy as np
 import pandas as pd
 
 from src import config
 from src.fitness import evaluate_chromosome
+
+# Progresso por geracao no terminal. Ligado por padrao (util no experimento
+# unico); a execucao paralela desliga via GA_VERBOSE=0 para nao intercalar a
+# saida de varios experimentos ao mesmo tempo.
+_VERBOSE = os.environ.get("GA_VERBOSE", "1") != "0"
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +296,12 @@ def run_genetic_algorithm(
         {"generation": 0, "best_fitness": best_fitness, "mean_fitness": float(fitness.mean())}
     ]
 
+    # Progresso visivel: sem isto o AG fica "mudo" durante as geracoes e parece
+    # travado. flush=True garante que a linha apareca na hora no terminal.
+    if _VERBOSE:
+        print(f"  [seed {seed}] gen 0 (pop inicial) | melhor={best_fitness:.4f} "
+              f"| media={fitness.mean():.4f} | avaliacoes={len(cache)}", flush=True)
+
     generations_without_improvement = 0
     if steps_per_generation is None:
         steps_per_generation = max(1, population_size // gap)
@@ -330,8 +343,10 @@ def run_genetic_algorithm(
         gen_best_idx = int(np.argmax(fitness))
         gen_best_fitness = float(fitness[gen_best_idx])
 
-        # Atualiza o melhor global e o contador de estagnacao.
-        if gen_best_fitness > best_fitness + 1e-9:
+        # Atualiza o melhor global e o contador de estagnacao. So conta como
+        # melhoria um ganho >= MIN_IMPROVEMENT (evita que ganhos microscopicos
+        # zerem o contador e a busca nunca pare).
+        if gen_best_fitness > best_fitness + config.MIN_IMPROVEMENT:
             best_fitness = gen_best_fitness
             best_chromosome = population[gen_best_idx].copy()
             best_metrics = evaluated[gen_best_idx][1]
@@ -346,6 +361,12 @@ def run_genetic_algorithm(
                 "mean_fitness": float(fitness.mean()),
             }
         )
+
+        if _VERBOSE:
+            print(f"  [seed {seed}] gen {generation} | melhor={best_fitness:.4f} "
+                  f"| media={fitness.mean():.4f} | avaliacoes={len(cache)} "
+                  f"| sem melhora={generations_without_improvement}/{no_improvement_limit}",
+                  flush=True)
 
         # Criterio de parada 2: estagnacao do melhor.
         if generations_without_improvement >= no_improvement_limit:
