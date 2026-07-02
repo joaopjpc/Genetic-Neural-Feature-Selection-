@@ -1,3 +1,28 @@
+"""Pre-processamento da base bruta de mortalidade por cancer do colo do utero.
+
+Transforma o ``.xlsx`` bruto na entrada numerica usada pelo Algoritmo Genetico e
+pela Rede Neural. Etapas (na ordem em que ``preprocess_and_save`` as executa):
+
+1. carga da planilha (``load_data``);
+2. remocao de linhas invalidas/duplicadas e filtro das classes-alvo
+   (``remove_invalid_rows``);
+3. engenharia de atributos de data e de ocupacao (``create_date_features``,
+   ``create_occupation_group``);
+4. descarte de colunas ruidosas, redundantes ou com vazamento de alvo/CID
+   (``drop_unwanted_columns``);
+5. split estratificado 70/15/15 (``split_data``);
+6. imputacao + codificacao + **normalizacao Min-Max** via ``ColumnTransformer``
+   (``build_preprocessor``); ajuste apenas no treino.
+
+Artefatos salvos em ``data/processed/``: matrizes ``X_*.npy``, rotulos
+``y_*.npy``, ``feature_names.json``, ``feature_groups.json``,
+``class_mapping.json``, os transformadores (``.joblib``) e um relatorio JSON.
+
+Importante: NENHUMA coluna de causa/CID entra como feature (evita vazamento do
+alvo ``label_cid``); os transformadores sao ajustados so no treino e aplicados a
+validacao/teste apenas com ``.transform()``.
+"""
+
 import json
 from pathlib import Path
 
@@ -100,6 +125,11 @@ MONTH_IGNORED_TOKENS = IGNORED_TOKENS - {"9", "9.0"}
 
 
 def _resolve_input_path(path: Path | str | None) -> Path:
+    """Resolve o caminho da base bruta de forma tolerante.
+
+    Usa ``path`` se existir; senao ``INPUT_PATH``; senao o primeiro ``.xlsx`` de
+    ``data/raw`` (contorna diferencas de acento/encoding no nome do arquivo).
+    """
     if path is not None:
         path = Path(path)
         if path.exists():
@@ -115,6 +145,10 @@ def _resolve_input_path(path: Path | str | None) -> Path:
 
 
 def load_data(path: Path | str | None = INPUT_PATH) -> pd.DataFrame:
+    """Carrega a base como DataFrame a partir de ``.xlsx``/``.xls`` ou ``.csv``.
+
+    Para Excel, retorna a primeira aba que contiver dados.
+    """
     path = _resolve_input_path(path)
 
     if path.suffix.lower() in {".xlsx", ".xls"}:
@@ -132,6 +166,11 @@ def load_data(path: Path | str | None = INPUT_PATH) -> pd.DataFrame:
 
 
 def remove_invalid_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove registros inconsistentes e restringe as classes-alvo validas.
+
+    Tira duplicatas, descarta linhas sem ``idade_obito_anos`` ou sem o alvo, e
+    mantem apenas os codigos CID em ``VALID_TARGET_CLASSES`` (C53/C54/C55).
+    """
     df = df.copy()
     df.columns = [str(col).strip() for col in df.columns]
 
@@ -149,6 +188,11 @@ def remove_invalid_rows(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _parse_compact_br_date(series: pd.Series) -> pd.Series:
+    """Converte datas compactas ``DDMMAAAA`` (com ruido) em ``datetime``.
+
+    Remove nao-digitos, completa com zeros a esquerda e invalida strings que nao
+    tenham exatamente 8 digitos (viram ``NaT``).
+    """
     date_text = (
         series
         .astype("string")
@@ -161,6 +205,11 @@ def _parse_compact_br_date(series: pd.Series) -> pd.Series:
 
 
 def create_date_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Deriva ano/mes de obito e de nascimento e remove as datas brutas.
+
+    Cria ``ano_obito``/``mes_obito`` (de ``DTOBITO``) e, quando disponivel,
+    ``ano_nascimento``/``mes_nascimento`` (de ``DTNASC``).
+    """
     df = df.copy()
     if "DTOBITO" not in df.columns:
         raise KeyError("Coluna obrigatoria ausente: DTOBITO")
@@ -183,6 +232,11 @@ def create_date_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def create_occupation_group(df: pd.DataFrame) -> pd.DataFrame:
+    """Cria ``OCUP_GRUPO`` (grande grupo = 2 primeiros digitos de ``OCUP``).
+
+    Codigos ausentes/ignorados viram ``"IGNORADO"``; a coluna ``OCUP`` original
+    e removida.
+    """
     df = df.copy()
     if "OCUP" not in df.columns:
         df["OCUP_GRUPO"] = "IGNORADO"
@@ -204,11 +258,17 @@ def create_occupation_group(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def drop_unwanted_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove as colunas de ``DROP_COLS`` (constantes, redundantes, vazamento, etc.)."""
     cols_to_drop = [col for col in DROP_COLS if col in df.columns]
     return df.drop(columns=cols_to_drop)
 
 
 def split_data(df: pd.DataFrame):
+    """Split estratificado em treino/validacao/teste (70/15/15).
+
+    Retorna ``(X_train, X_val, X_test, y_train, y_val, y_test)`` ainda sem
+    codificacao (a codificacao/normalizacao e ajustada depois, so no treino).
+    """
     feature_cols = NUMERIC_COLS + BINARY_SN_COLS + CATEGORICAL_COLS + FREQUENCY_ENCODING_COLS
     X = df[feature_cols].copy()
     y = df[TARGET].copy()
@@ -233,6 +293,7 @@ def split_data(df: pd.DataFrame):
 
 
 def _binary_sn_to_numeric(values):
+    """Converte colunas ``S/N`` em ``1/0``; valores desconhecidos viram ``0``."""
     frame = pd.DataFrame(values).copy()
     frame = frame.apply(lambda col: col.astype("string").str.strip().str.upper())
     frame = frame.replace({"S": 1, "N": 0})
@@ -242,6 +303,11 @@ def _binary_sn_to_numeric(values):
 
 
 def _normalize_category_frame(values):
+    """Padroniza colunas categoricas: trim, remove ``.0`` e mapeia tokens ausentes.
+
+    Tokens de "ignorado"/nulos (``IGNORED_TOKENS``, com tratamento especial para
+    meses) sao unificados em ``"IGNORADO"``.
+    """
     frame = pd.DataFrame(values).copy()
     frame = frame.astype("string").fillna("IGNORADO")
     frame = frame.apply(lambda col: col.str.strip())
@@ -259,10 +325,19 @@ def _to_string_with_ignored(values):
 
 
 class FrequencyEncoder(BaseEstimator, TransformerMixin):
+    """Codifica categorias de alta cardinalidade pela frequencia relativa.
+
+    Aprende, no ``fit`` (apenas com o treino), a frequencia relativa de cada
+    categoria por coluna; no ``transform`` substitui cada categoria por essa
+    frequencia. Categorias nunca vistas recebem ``0``. Evita a explosao de
+    colunas que o One-Hot causaria em variaveis como municipio/estabelecimento.
+    """
+
     def __init__(self):
         self.frequency_maps_ = []
 
     def fit(self, X, y=None):
+        """Aprende, por coluna, o mapa {categoria: frequencia relativa} no treino."""
         frame = _normalize_category_frame(X)
         self.feature_names_in_ = [str(col) for col in frame.columns]
         self.frequency_maps_ = []
@@ -274,6 +349,7 @@ class FrequencyEncoder(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X):
+        """Mapeia cada categoria para sua frequencia aprendida (desconhecidas -> 0)."""
         frame = _normalize_category_frame(X)
         encoded_cols = []
 
@@ -293,6 +369,13 @@ def _make_one_hot_encoder() -> OneHotEncoder:
 
 
 def build_preprocessor() -> ColumnTransformer:
+    """Monta o ``ColumnTransformer`` com um pipeline por tipo de coluna.
+
+    * numericas: imputacao pela mediana + **Min-Max** (normalizacao linear [0,1]);
+    * binarias S/N: conversao para 0/1;
+    * categoricas: ``"IGNORADO"`` + One-Hot (``handle_unknown="ignore"``);
+    * alta cardinalidade: Frequency Encoding + imputacao com 0.
+    """
     numeric_pipeline = Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="median")),
@@ -333,6 +416,10 @@ def build_preprocessor() -> ColumnTransformer:
 
 
 def get_feature_names(preprocessor: ColumnTransformer) -> list[str]:
+    """Retorna os nomes das colunas de saida, na ordem final de ``X``.
+
+    Essa ordem define a correspondencia gene <-> feature no cromossomo do AG.
+    """
     categorical_encoder = preprocessor.named_transformers_["categorical"].named_steps["onehot"]
     categorical_features = categorical_encoder.get_feature_names_out(CATEGORICAL_COLS).tolist()
     frequency_features = [f"{col}_freq" for col in FREQUENCY_ENCODING_COLS]
@@ -340,6 +427,11 @@ def get_feature_names(preprocessor: ColumnTransformer) -> list[str]:
 
 
 def get_feature_groups(preprocessor: ColumnTransformer) -> dict[str, list[str]]:
+    """Mapeia cada coluna original -> lista de colunas de saida que ela gerou.
+
+    Util para interpretar os resultados (ex.: quais colunas one-hot vieram de uma
+    mesma variavel categorica).
+    """
     categorical_encoder = preprocessor.named_transformers_["categorical"].named_steps["onehot"]
     categorical_features = categorical_encoder.get_feature_names_out(CATEGORICAL_COLS).tolist()
     feature_groups = {}
@@ -372,6 +464,17 @@ def _save_json(data: dict, path: Path) -> None:
 
 
 def preprocess_and_save(input_path: Path | str | None = INPUT_PATH, output_dir: Path | str = OUTPUT_DIR) -> dict:
+    """Executa o pipeline completo e salva todos os artefatos em ``output_dir``.
+
+    Encadeia carga -> limpeza -> engenharia de atributos -> split 70/15/15 ->
+    codificacao/normalizacao (ajuste so no treino) e persiste ``X_*.npy``,
+    ``y_*.npy``, os JSONs de features/classes, os transformadores ``.joblib`` e
+    um ``preprocessing_report.json``.
+
+    Returns:
+        O dicionario de relatorio (contagens, distribuicoes de classe, colunas
+        removidas/transformadas e a lista de features candidatas do AG).
+    """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -479,10 +582,12 @@ def preprocess_and_save(input_path: Path | str | None = INPUT_PATH, output_dir: 
 
 
 def main() -> None:
+    """Ponto de entrada padrao: roda o pipeline com os caminhos default."""
     preprocess_and_save(INPUT_PATH, OUTPUT_DIR)
 
 
 def run_preprocessing() -> None:
+    """Alias de ``main`` usado por ``scripts/run_preprocessing.py``."""
     main()
 
 

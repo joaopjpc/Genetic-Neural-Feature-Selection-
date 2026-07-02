@@ -9,28 +9,26 @@ env/
 
 .ipynb_checkpoints/
 
+# Dados brutos, intermediarios e processados (nao versionar - passam do limite do GitHub)
 data/raw/*
 data/interim/*
 data/processed/*
-!data/raw/.gitkeep
-!data/interim/.gitkeep
-!data/processed/.gitkeep
 
-results/experiments/*
+# Resultados gerados pelos experimentos
+results/experiments/*/*
 results/summary/*
 results/figures/*
-!results/experiments/.gitkeep
-!results/experiments/exp_01/
-!results/experiments/exp_20/
-!results/experiments/exp_01/.gitkeep
-!results/experiments/exp_20/.gitkeep
-!results/summary/.gitkeep
-!results/figures/.gitkeep
 
+# Manter a estrutura de pastas vazias
+!**/.gitkeep
+
+# Artefatos grandes / binarios
+*.npy
+*.joblib
 *.xlsx
 *.xls
-*.csv
-*.json
-*.png
-*.jpg
-*.jpeg
+
+# Sistema
+.DS_Store
+Thumbs.db
+

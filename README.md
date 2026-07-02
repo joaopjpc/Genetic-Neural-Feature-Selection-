@@ -4,6 +4,8 @@ Projeto para selecao de atributos em dados de cancer de utero usando algoritmo g
 
 O pipeline principal prepara a base bruta, transforma as variaveis em uma matriz numerica pronta para MLP/Softmax e permite que o Algoritmo Genetico selecione subconjuntos de features por cromossomos binarios.
 
+Ponto importante: o cromossomo e indexado por **atributo original** (ex.: `RACACOR`, `res_SIGLA_UF`), nao pela coluna final apos o one-hot. Sao **29 atributos** (3 numericos + 6 binarios + 15 categoricos + 5 frequency), que se expandem para **181 colunas**. Cada gene liga/desliga um atributo inteiro: se ligado, todas as colunas one-hot daquele atributo entram na rede.
+
 ## Estrutura
 
 - `data/raw/`: base original. Coloque aqui o arquivo `Base Slim Morte cancer de utero.xlsx`.
@@ -84,19 +86,50 @@ Resumo do que o pipeline faz:
 
 Os transformadores sao ajustados apenas no treino. Validacao e teste recebem apenas `.transform()`.
 
-## Experimentos
+## Algoritmo genetico e rede neural
 
-Depois de gerar `data/processed/`, rode um experimento:
+O AG (`src/genetic_algorithm.py`) e um **Steady-State GA**:
 
-```bash
-python scripts/run_single_experiment.py
+- cromossomo binario por atributo original (`L = 29`), com **minimo de 3 atributos** ligados (reparo);
+- **crossover uniforme** (Pc = 0.85) e **mutacao** bit-flip (Pm = 1/L);
+- **elitismo** dos 10 melhores e **Steady-State com Gap = 2** (2 filhos por geracao, substituindo os 2 piores);
+- **selecao por roleta** sobre a aptidao apos **escalonamento linear** (Goldberg), evitando super-individuo;
+- 1 geracao = 1 renovacao completa da populacao (`pop/gap` = 75 passos, 150 filhos), para dar escala real a busca;
+- parada em 200 geracoes ou 20 geracoes sem melhoria.
+
+Para viabilizar os milhares de treinos, cada rede-avaliadora e treinada num subconjunto estratificado do treino (`FITNESS_SUBSAMPLE`, ex.: 20000 linhas); a avaliacao final do melhor cromossomo e o teste usam a base cheia.
+
+A aptidao de cada cromossomo (`src/fitness.py`) treina uma rede neural (`src/neural_network.py`, `sklearn` MLPClassifier: 32 ReLU -> 16 ReLU -> softmax, Adam lr 0.001) apenas nas colunas dos atributos ligados e calcula:
+
+```text
+Fitness = 0.9 * F1-macro(validacao) + 0.1 * (1 - Ns/Nt)
 ```
 
-Para rodar os 20 experimentos:
+com `Ns` = atributos selecionados e `Nt` = 29. Os parametros ficam todos em `src/config.py`.
+
+## Experimentos
+
+Depois de gerar `data/processed/`, rode um experimento (imprime fitness, F1 de validacao/teste, nº de atributos/colunas, geracoes e tempo):
+
+```bash
+python scripts/run_single_experiment.py            # experimento 1
+python scripts/run_single_experiment.py -n 3       # experimento 3
+```
+
+Cada experimento salva em `results/experiments/exp_XX/`: `best_chromosome.json`, `metrics.json` e `convergence.csv`.
+
+Para rodar os 20 experimentos e agregar tudo:
 
 ```bash
 python scripts/run_20_experiments.py
 ```
+
+Isso gera, alem das pastas por experimento:
+
+- `results/summary/summary.json` (media/dp de F1 de teste, nº de atributos, melhor cromossomo global);
+- `results/summary/convergence_curve.csv` e `results/summary/feature_frequency.csv`;
+- `results/figures/convergence.png` (curva media de convergencia dos 20 experimentos);
+- `results/figures/feature_frequency.png` (frequencia de selecao de cada atributo).
 
 ## Documentacao do codigo
 

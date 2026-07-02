@@ -1,10 +1,10 @@
 # Codigo e pipelines em `src`
 
-Este diretorio concentra o codigo principal do projeto. A ideia e manter cada etapa separada: pre-processamento, rede neural, funcao de fitness, algoritmo genetico e execucao de experimentos.
+Este diretorio concentra o codigo principal do projeto. Cada etapa fica separada:
+pre-processamento, rede neural, funcao de fitness, algoritmo genetico, execucao
+de experimentos e agregacao de resultados.
 
 ## Pipeline principal
-
-Fluxo esperado:
 
 ```text
 data/raw/*.xlsx
@@ -18,128 +18,126 @@ data/processed/*.npy + *.json + *.joblib
         v
 src/experiment.py
         |
-        v
-src/genetic_algorithm.py -> src/fitness.py -> src/neural_network.py
+   +----+---------------------------+
+   |                                |
+   v                                v
+src/genetic_algorithm.py --> src/fitness.py --> src/neural_network.py
         |
         v
-results/experiments/
+results/experiments/exp_XX/
+        |
+        v
+src/aggregate.py --> results/summary/ + results/figures/
 ```
+
+## Conceito central: cromossomo por atributo original
+
+O cromossomo **nao** tem um gene por coluna final. Ele tem um gene por
+**atributo original** candidato (L = 29): 3 numericos + 6 binarios + 15
+categoricos + 5 frequency. Uma variavel categorica vira varias colunas one-hot
+(ex.: `res_SIGLA_UF` -> 27 colunas), mas conta como **um** gene. Gene ligado ->
+todas as colunas daquele atributo entram na rede; desligado -> nenhuma entra.
+O mapeamento gene -> colunas vem de `feature_groups.json`.
 
 ## `preprocessing.py`
 
-Responsavel por preparar a base final para a rede neural e para o algoritmo genetico.
+Prepara a base final para a rede neural e para o algoritmo genetico.
 
 Funcoes principais:
 
 - `load_data(path)`: carrega `.xlsx`, `.xls` ou `.csv`. Para Excel, usa a primeira aba com dados.
-- `remove_invalid_rows(df)`: remove duplicatas, linhas sem `idade_obito_anos`, linhas sem `label_cid` e mantem apenas `C53`, `C54`, `C55`.
-- `create_date_features(df)`: interpreta `DTOBITO` e `DTNASC` como `DDMMAAAA`, cria `ano_obito`, `mes_obito`, `ano_nascimento` e `mes_nascimento`, depois remove as datas brutas.
-- `create_occupation_group(df)`: cria `OCUP_GRUPO` a partir de `OCUP`, depois remove `OCUP`.
-- `drop_unwanted_columns(df)`: remove colunas constantes, administrativas, muito nulas, redundantes e colunas com vazamento de alvo/CID.
-- `split_data(df)`: faz split estratificado em `70%` treino, `15%` validacao e `15%` teste.
-- `build_preprocessor()`: cria o `ColumnTransformer` com os pipelines de features.
-- `preprocess_and_save(input_path, output_dir)`: executa o fluxo completo e salva os artefatos finais.
-- `main()`: ponto de entrada usado por `python preprocessing.py` e `python scripts/run_preprocessing.py`.
+- `remove_invalid_rows(df)`: remove duplicatas, linhas sem `idade_obito_anos`/`label_cid` e mantem apenas `C53`, `C54`, `C55`.
+- `create_date_features(df)`: interpreta `DTOBITO`/`DTNASC` como `DDMMAAAA` e cria ano/mes de obito e nascimento.
+- `create_occupation_group(df)`: cria `OCUP_GRUPO` a partir de `OCUP`.
+- `drop_unwanted_columns(df)`: remove colunas constantes, administrativas, muito nulas, redundantes e com vazamento de alvo/CID.
+- `split_data(df)`: split estratificado `70%` treino, `15%` validacao, `15%` teste.
+- `build_preprocessor()`: `ColumnTransformer` com imputacao + codificacao + normalizacao Min-Max.
+- `get_feature_names` / `get_feature_groups`: nomes das colunas finais e o mapa atributo -> colunas.
+- `preprocess_and_save(...)`: executa o fluxo completo e salva os artefatos.
 
-Features finais antes da codificacao:
+Saidas em `data/processed/`: `X_train/val/test.npy`, `y_train/val/test.npy`,
+`feature_names.json`, `feature_groups.json`, `class_mapping.json`,
+`preprocessor.joblib`, `label_encoder.joblib`, `preprocessing_report.json`.
 
-- Numericas: `idade_obito_anos`, `ano_obito`, `ano_nascimento`
-- Binarias `S/N`: `res_AMAZONIA`, `res_FRONTEIRA`, `res_CAPITAL`, `ocor_AMAZONIA`, `ocor_FRONTEIRA`, `ocor_CAPITAL`
-- Categoricas: `mes_obito`, `mes_nascimento`, `RACACOR`, `ESTCIV`, `ESC`, `LOCOCOR`, `ASSISTMED`, `EXAME`, `CIRURGIA`, `NECROPSIA`, `res_SIGLA_UF`, `res_REGIAO`, `ocor_SIGLA_UF`, `ocor_REGIAO`, `OCUP_GRUPO`
-- Frequency encoding: `NATURAL`, `CODMUNNATU`, `CODMUNRES`, `CODMUNOCOR`, `CODESTAB`
-
-Transformacoes:
-
-- numericas: `SimpleImputer(strategy="median")` + `MinMaxScaler(clip=True)`;
-- binarias: `"S" -> 1`, `"N" -> 0`, desconhecidos -> `0`;
-- categoricas: string + preenchimento com `"IGNORADO"` + `OneHotEncoder(handle_unknown="ignore")`;
-- frequency encoding: frequencia relativa aprendida apenas no treino, desconhecidos -> `0`;
-- alvo `label_cid`: `LabelEncoder`.
-
-Saidas salvas em `data/processed/`:
-
-- `X_train.npy`, `X_val.npy`, `X_test.npy`
-- `y_train.npy`, `y_val.npy`, `y_test.npy`
-- `feature_names.json`
-- `feature_groups.json`
-- `class_mapping.json`
-- `preprocessor.joblib`
-- `label_encoder.joblib`
-- `preprocessing_report.json`
-
-## `neural_network.py`
-
-Define a MLP usada para avaliar subconjuntos de atributos.
-
-Funcoes principais:
-
-- `build_model(input_dim)`: cria uma rede neural sequencial.
-- `train_and_evaluate(X_train, y_train, X_val, y_val, epochs)`: treina a rede e retorna metricas de validacao.
-
-Observacao: este modulo nao faz selecao de atributos sozinho. Ele recebe uma matriz ja filtrada pelo cromossomo avaliado.
-
-## `fitness.py`
-
-Conecta cromossomos do algoritmo genetico com a rede neural.
-
-Funcoes principais:
-
-- `selected_columns(chromosome, feature_names)`: converte o cromossomo binario em lista de features selecionadas.
-- `evaluate_chromosome(chromosome, X_train, y_train, X_val, y_val)`: treina/avalia a rede usando apenas as features selecionadas e retorna o fitness.
-
-## `genetic_algorithm.py`
-
-Implementa a busca por subconjuntos de features.
-
-Componentes principais:
-
-- criacao de populacao inicial;
-- selecao por torneio;
-- crossover;
-- mutacao;
-- elitismo;
-- registro da convergencia por geracao.
-
-A saida principal inclui:
-
-- melhor cromossomo;
-- melhor fitness;
-- metricas do melhor individuo;
-- historico de convergencia.
-
-## `experiment.py`
-
-Orquestra um experimento completo.
-
-Funcoes principais:
-
-- carrega os dados processados;
-- executa o algoritmo genetico;
-- salva cromossomo, features selecionadas, metricas e convergencia em `results/experiments/exp_XX/`.
-
-## `config.py`
-
-Centraliza caminhos e parametros gerais do projeto.
-
-Use esse arquivo para alterar valores como:
-
-- diretorios de dados e resultados;
-- seed (`RANDOM_STATE`);
-- parametros do algoritmo genetico;
-- parametros basicos da rede neural.
+Cuidados: transformadores sao ajustados apenas no treino; validacao e teste usam
+so `.transform()`; nenhuma coluna de causa/CID entra como feature.
 
 ## `utils.py`
 
-Funcoes auxiliares usadas por outros modulos, como:
+Utilidades de I/O e o carregador dos dados processados.
 
-- criacao de diretorios;
-- leitura dos dados processados;
-- escrita de JSON.
+- `ensure_dir`, `save_json`, `load_json`.
+- `load_processed_data(dir)`: le os `.npy`/`.json` e retorna um dicionario com as
+  matrizes, os rotulos, `feature_names`, `feature_groups`, `group_names`,
+  `group_column_indices` (indices de coluna de cada atributo), `n_groups` (L),
+  `n_classes` e `n_columns`.
 
-## Cuidados importantes
+## `neural_network.py`
 
-- Nao usar colunas de causa/CID como entrada quando o alvo for `label_cid`.
-- Ajustar transformadores apenas no treino.
-- Usar validacao e teste apenas com `.transform()`.
-- Manter `feature_names.json` alinhado com as colunas de `X`.
-- Usar `class_mapping.json` para interpretar os inteiros do alvo.
+Rede Neural avaliadora, implementada com `sklearn.neural_network.MLPClassifier`
+(MLP treinada por backpropagation + Adam; softmax + log-loss em multiclasse).
+Escolhida no lugar do TensorFlow/Keras por ser leve e rapida para os milhares de
+treinos pequenos que o AG dispara.
+
+- `build_model(random_state)`: arquitetura 32 ReLU -> 16 ReLU -> softmax, Adam
+  `learning_rate_init=0.001`, `early_stopping=True` (menor erro de validacao).
+- `train_and_evaluate(X_train, y_train, X_eval, y_eval, random_state)`: treina e
+  retorna `(modelo, metricas)` com F1 macro, acuracia, precisao e recall.
+
+## `fitness.py`
+
+Conecta cromossomos (por atributo) a rede neural.
+
+- `selected_columns(chromosome, group_column_indices)`: expande os genes ligados
+  para os indices de coluna correspondentes em `X`.
+- `selected_groups(chromosome, group_names)`: nomes dos atributos ligados.
+- `combined_fitness(f1, ns, nt)`: `0.9 * F1 + 0.1 * (1 - Ns/Nt)`.
+- `evaluate_chromosome(...)`: treina a rede nas colunas ativas, mede F1-macro na
+  validacao e retorna `(fitness, metrics)`. Aceita um `cache` por cromossomo
+  (o treino e deterministico dado o `random_state`, entao o cache e exato).
+
+## `genetic_algorithm.py`
+
+Steady-State GA. Componentes:
+
+- `repair`: garante o piso de `config.MIN_FEATURES` atributos ligados;
+- `create_individual` / `create_population`: populacao inicial (respeitando o piso);
+- `uniform_crossover`: crossover uniforme (Pc), dois filhos;
+- `mutate`: bit-flip com Pm = 1/L + reparo;
+- `linear_scaling`: escalonamento linear de Goldberg da aptidao;
+- `roulette_indices`: selecao proporcional sobre a aptidao escalonada;
+- `run_genetic_algorithm(...)`: loop principal (elitismo 10, Gap 2, parada por
+  200 geracoes ou 20 sem melhoria). 1 geracao = 1 renovacao da populacao
+  (`pop/gap` passos steady-state). Recebe `group_column_indices` (define L) e
+  retorna melhor cromossomo, melhor fitness, metricas, convergencia, nº de
+  avaliacoes e geracoes executadas.
+
+## `experiment.py`
+
+Orquestra um experimento completo:
+
+- carrega os dados processados (uma vez pode ser reusado via argumento `data`);
+- subamostra o treino so para a fitness (`FITNESS_SUBSAMPLE`);
+- roda o AG (treino subamostrado + validacao);
+- reavalia o melhor cromossomo no conjunto de **teste** (treino cheio);
+- salva `best_chromosome.json`, `metrics.json` (inclui tempo em segundos) e
+  `convergence.csv` em `results/experiments/exp_XX/`.
+
+## `aggregate.py`
+
+Consolida os multiplos experimentos:
+
+- `build_convergence_curve`: media (+/- dp) do melhor fitness por geracao;
+- `build_feature_frequency`: frequencia de selecao de cada atributo;
+- `build_summary`: media/dp de F1 de teste, nº de atributos e melhor cromossomo global;
+- `plot_convergence` / `plot_feature_frequency`: figuras `.png`;
+- `aggregate_results()`: le tudo, salva csv/json em `results/summary/` e as
+  figuras em `results/figures/`.
+
+## `config.py`
+
+Centraliza caminhos e todos os hiperparametros: parametros do AG
+(`POPULATION_SIZE`, `MIN_FEATURES`, `MAX_GENERATIONS`, `CROSSOVER_RATE`,
+`ELITISM_SIZE`, `STEADY_STATE_GAP`, `NO_IMPROVEMENT_LIMIT`, `LINEAR_SCALING_C`),
+pesos da fitness, arquitetura/treino da rede, `N_EXPERIMENTS` e `RANDOM_STATE`.
+`Pm = 1/L` e calculado em runtime por `mutation_rate(n_features)`.
