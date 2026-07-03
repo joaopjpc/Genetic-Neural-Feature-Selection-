@@ -118,18 +118,36 @@ python scripts/run_single_experiment.py -n 3       # experimento 3
 
 Cada experimento salva em `results/experiments/exp_XX/`: `best_chromosome.json`, `metrics.json` e `convergence.csv`.
 
-Para rodar os 20 experimentos e agregar tudo:
+Para rodar os 20 experimentos e agregar tudo, ha duas opcoes:
 
 ```bash
+# Recomendado: em paralelo (1 experimento por nucleo da CPU). Muito mais rapido.
+python scripts/run_parallel.py
+
+# Alternativa: em serie (um experimento de cada vez).
 python scripts/run_20_experiments.py
 ```
 
-Isso gera, alem das pastas por experimento:
+Ambos rodam `N_EXPERIMENTS` (20) execucoes completas com sementes diferentes e, ao
+final, agregam os resultados. O `run_parallel.py` usa `joblib` (cada experimento e
+independente); a saida por geracao e desligada (`GA_VERBOSE=0`) para nao intercalar,
+e as linhas `[exp NN]` aparecem na ordem em que cada um termina.
+
+Saidas geradas (alem das pastas `results/experiments/exp_XX/`):
 
 - `results/summary/summary.json` (media/dp de F1 de teste, nº de atributos, melhor cromossomo global);
 - `results/summary/convergence_curve.csv` e `results/summary/feature_frequency.csv`;
 - `results/figures/convergence.png` (curva media de convergencia dos 20 experimentos);
 - `results/figures/feature_frequency.png` (frequencia de selecao de cada atributo).
+
+### Velocidade (ajustes em `src/config.py`)
+
+Cada avaliacao do AG treina uma rede, entao os 20 experimentos disparam milhares de
+treinos. Para controlar o tempo:
+
+- `FITNESS_SUBSAMPLE`: nº de linhas de treino usadas na fitness (menor = mais rapido, porem mais ruidoso; `None` = base cheia);
+- `NN_MAX_ITER` / `NN_BATCH_SIZE`: custo de treino de cada rede;
+- `POPULATION_SIZE`, `MAX_GENERATIONS`, `N_EXPERIMENTS`: reduza para um teste rapido; use os valores da spec na rodada final.
 
 ## Documentacao do codigo
 
